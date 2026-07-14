@@ -786,18 +786,75 @@
   }
 
   // flatline pulse animation on end section
-  const flatlinePath = document.getElementById('flatlinePath');
-  let ft = 0;
-  function animateFlatline(){
-    ft += 0.05;
-    const pulse = Math.sin(ft) > 0.9 ? Math.sin(ft*40)*20 : 0;
-    const path = `M0,50 L200,50 L215,${50-pulse*1.5} L225,${50+pulse*2} L235,50 L500,50`;
-    if(flatlinePath) flatlinePath.setAttribute('d', path);
-    requestAnimationFrame(animateFlatline);
+  // const flatlinePath = document.getElementById('flatlinePath');
+  // let ft = 0;
+  // function animateFlatline(){
+  //   ft += 0.05;
+  //   const pulse = Math.sin(ft) > 0.9 ? Math.sin(ft*40)*20 : 0;
+  //   const path = `M0,50 L200,50 L215,${50-pulse*1.5} L225,${50+pulse*2} L235,50 L500,50`;
+  //   if(flatlinePath) flatlinePath.setAttribute('d', path);
+  //   requestAnimationFrame(animateFlatline);
+  // }
+  // if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+  //   animateFlatline();
+  // }
+  const flatlinePath = document.getElementById("flatlinePath");
+
+let ft = 0;
+
+function animateFlatline() {
+  ft += 0.06;
+
+  const baseY = 50;
+  const points = [];
+
+  for (let x = 0; x <= 500; x += 5) {
+    let y = baseY;
+
+    // 심장 박동 위치
+    const beatPos = (ft * 120) % 600 - 50;
+    const d = x - beatPos;
+
+    // ECG 스파이크
+    y += -30 * Math.exp(-(d + 12) ** 2 / 25);
+    y +=  60 * Math.exp(-(d) ** 2 / 10);
+    y += -20 * Math.exp(-(d - 10) ** 2 / 20);
+
+    // 미세한 흔들림
+    y += Math.sin(ft * 2 + x * 0.03) * 0.8;
+    y += Math.sin(ft * 5 + x * 0.08) * 0.4;
+
+    points.push(`${x},${y.toFixed(2)}`);
   }
-  if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches){
-    animateFlatline();
-  }
+
+  flatlinePath.setAttribute("d", `M${points.join(" L")}`);
+
+  requestAnimationFrame(animateFlatline);
+}
+
+if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  animateFlatline();
+}
+
+  // keyboard arrow navigation
+  document.addEventListener('keydown', (e)=>{
+    const sectionIds = Array.from(sections).map(s=>s.id);
+    const currentHash = window.location.hash.slice(1) || 's1';
+    const currentIdx = sectionIds.indexOf(currentHash);
+    let targetIdx = currentIdx;
+
+    if(e.key === 'ArrowLeft' || e.key === 'ArrowUp'){
+      targetIdx = Math.max(0, currentIdx - 1);
+      e.preventDefault();
+    } else if(e.key === 'ArrowRight' || e.key === 'ArrowDown'){
+      targetIdx = Math.min(sectionIds.length - 1, currentIdx + 1);
+      e.preventDefault();
+    }
+
+    if(targetIdx !== currentIdx){
+      window.location.hash = sectionIds[targetIdx];
+    }
+  });
 </script>
 
 </body>
