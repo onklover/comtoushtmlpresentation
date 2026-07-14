@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI가 감정을 "예상"하는 법</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+KR:wght@400;500;700;900&display=swap');
+
+  :root{
+    --bg: #0a0d0f;
+    --bg-alt: #0d1113;
+    --panel: #10181a;
+    --line: #1e2b2d;
+    --signal: #5ffbf1;
+    --signal-dim: #2a8f89;
+    --warn: #ff5f56;
+    --amber: #ffb454;
+    --ink: #e9f6f5;
+    --ink-dim: #7fa3a0;
+    --grid: rgba(95,251,241,0.06);
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html{ scroll-behavior:smooth; }
+
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Noto Sans KR', sans-serif;
+    overflow-x:hidden;
+  }
+
+  ::selection{ background:var(--signal); color:#000; }
+
+  /* scanline / grid texture */
+  .scope-grid{
+    position:fixed; inset:0; pointer-events:none; z-index:0;
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 40px 40px;
+    opacity:0.9;
+  }
+  .scope-vignette{
+    position:fixed; inset:0; pointer-events:none; z-index:1;
+    background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.55) 100%);
+  }
+
+  .deck{
+    position:relative; z-index:2;
+  }
+
+  section{
+    min-height:100svh;
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+    padding: 8vh 8vw;
+    position:relative;
+    border-bottom:1px solid var(--line);
+  }
+
+  .tag{
+    font-family:'JetBrains Mono', monospace;
+    font-size:0.72rem;
+    letter-spacing:0.18em;
+    text-transform:uppercase;
+    color:var(--signal);
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin-bottom:22px;
+  }
+  .tag::before{
+    content:'';
+    width:8px; height:8px;
+    background:var(--signal);
+    border-radius:50%;
+    box-shadow:0 0 12px var(--signal), 0 0 2px var(--signal);
+    animation: blink 1.6s infinite;
+  }
+  @keyframes blink{ 0%,100%{opacity:1;} 50%{opacity:0.25;} }
+
+  h1, h2{
+    font-family:'Space Grotesk', 'Noto Sans KR', sans-serif;
+    font-weight:700;
+    line-height:1.15;
+    letter-spacing:-0.01em;
+  }
+  h1{ font-size:clamp(2.4rem, 6vw, 5rem); }
+  h2{ font-size:clamp(1.8rem, 4vw, 3.2rem); margin-bottom:0.6em; }
+
+  .lead{
+    max-width: 720px;
+    font-size:clamp(1rem, 1.6vw, 1.2rem);
+    color:var(--ink-dim);
+    line-height:1.75;
+    margin-top:24px;
+    font-weight:400;
+  }
+
+  .kicker-line{
+    font-family:'JetBrains Mono', monospace;
+    color:var(--ink-dim);
+    font-size:0.85rem;
+    letter-spacing:0.05em;
+  }
+
+  /* ---------------- HERO ---------------- */
+  .hero{
+    align-items:flex-start;
+    background:
+      radial-gradient(ellipse 70% 60% at 78% 30%, rgba(95,251,241,0.09), transparent 60%),
+      var(--bg);
+  }
+  .hero-title{
+    display:flex; flex-direction:column; gap:6px;
+  }
+  .hero-title .accent{ color:var(--signal); }
+
+  .waveform-hero{
+    position:absolute;
+    right:6vw; top:50%;
+    transform:translateY(-50%);
+    width:min(38vw, 460px);
+    opacity:0.9;
+  }
+  .waveform-hero svg{ width:100%; height:auto; }
+
+  .thought-mini{
+    display:inline-flex;
+    align-items:center;
+    gap:10px;
+    margin-top:32px;
+    font-family:'JetBrains Mono', monospace;
+    font-size:0.95rem;
+    color:var(--amber);
+    border:1px solid rgba(255,180,84,0.35);
+    padding:10px 18px;
+    border-radius:999px;
+    background:rgba(255,180,84,0.06);
+  }
+  .thought-mini::before{ content:'◐'; }
+
+  .hero-meta{
+    position:absolute;
+    bottom:6vh; left:8vw;
+    font-family:'JetBrains Mono', monospace;
+    font-size:0.72rem;
+    color:var(--ink-dim);
+    letter-spacing:0.1em;
+    display:flex; gap:28px;
+  }
+
+  .scroll-cue{
+    position:absolute; bottom:6vh; right:8vw;
+    font-family:'JetBrains Mono', monospace;
+    font-size:0.7rem;
+    color:var(--ink-dim);
+    display:flex; flex-direction:column; align-items:center; gap:8px;
+    animation: floaty 2.2s ease-in-out infinite;
+  }
+  @keyframes floaty{ 0%,100%{ transform:translateY(0);} 50%{transform:translateY(8px);} }
+
+  /* ---------------- CHARACTER / L IMAGE ---------------- */
+  .char-panel{
+    display:grid;
+    grid-template-columns: 1fr 1fr;
+    gap:60px;
+    align-items:center;
+    max-width:1200px;
+    margin:0 auto;
+    width:100%;
+  }
+  .char-panel img{
+    width:100%;
+    border-radius:2px;
+    border:1px solid var(--line);
+    filter:grayscale(15%) contrast(1.05);
+  }
+  .panel-frame{
+    position:relative;
+    padding:14px;
+    background:var(--panel);
+    border:1px solid var(--line);
+  }
+  .panel-frame::before{
+    content: attr(data-label);
+    position:absolute;
+    top:-11px; left:16px;
+    background:var(--bg);
+    padding:0 8px;
+    font-family:'JetBrains Mono', monospace;
+    font-size:0.65rem;
+    letter-spacing:0.12em;
+    color:var(--signal-dim);
+  }
+
+  .quote-bubble{
+    font-family:'JetBrains Mono', monospace;
+    font-size:0.85rem;
+    color:var(--signal);
+    background:rgba(95,251,241,0.06);
+    border:1px solid rgba(95,251,241,0.25);
+    border-radius:14px;
+    padding:12px 16px;
+    display:inline-block;
+    margin-top:16px;
+  }
+
+  /* ---------------- LEARNING SECTION ---------------- */
+  .learn-flow{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:0;
+    flex-wrap:wrap;
+    max-width:1200px;
+    margin:50px auto 0;
+    width:100%;
+  }
+  .learn-card{
+    flex:1 1 340px;
+    max-width:400px;
+    text-align:center;
+  }
+  .learn-card .panel-frame{ padding:10px; }
+  .learn-card img{
+    width:100%;
+    aspect-ratio:16/10;
+    object-fit:cover;
+    border-radius:1px;
+  }
+  .learn-card .caption{
+    margin-top:18px;
+    font-size:1rem;
+    color:var(--ink-dim);
+    line-height:1.6;
+  }
+  .learn-card .label-tag{
+    font-family:'JetBrains Mono', monospace;
+    font-size:0.7rem;
+    color:var(--amber);
+    letter-spacing:0.1em;
+    margin-bottom:8px;
+    display:block;
+  }
+  .arrow-signal{
+    flex: 0 0 90px;
+    display:flex; align-items:center; justify-content:center;
+    color:var(--signal);
+    font-size:2rem;
+    align-self:center;
+    padding-bottom: 60px;
+  }
+  @media (max-width:900px){
+    .arrow-signal{ transform:rotate(90deg); padding:10px 0; flex-basis:auto; }
+  }
+
+  .callout-float{
+    margin-top:40px;
+    font-family:'JetBrains Mono', monospace;
+    font-size:0.85rem;
+    color:var(--signal);
+    text-align:center;
+    opacity:0.85;
+  }
+
+  /* ---------------- WARNING SECTION ---------------- */
+  .warn-section{
+    background:
+      linear-gradient(180deg, rgba(255,95,86,0.05), transparent 40%),
+      var(--bg-alt);
+  }
+  .warn-box{
+    display:flex;
+    align-items:center;
+    gap:56px;
+    max-width:1100px;
+    margin:0 auto;
+    flex-wrap:wrap;
+  }
+  .warn-visual{
+    position:relative;
+    width:220px; height:220px;
+    flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .warn-visual svg{ width:100%; height:100%; }
+  .empty-bubble{
+    position:absolute;
+    font-family:'JetBrains Mono', monospace;
+    font-size:0.75rem;
+    color:var(--ink-dim);
+    letter-spacing:0.1em;
+  }
+  .warn-text .tag{ color:var(--warn); }
+  .warn-text .tag::before{ background:var(--warn); box-shadow:0 0 12px var(--warn); }
+  .warn-statement{
+    font-size:clamp(1.4rem, 2.6vw, 2rem);
+    font-weight:700;
+    line-height:1.5;
+    max-width:600px;
+  }
+  .warn-statement .strike-target{
+    color:var(--warn);
+    text-decoration: line-through;
+    text-decoration-thickness: 2px;
+    text-decoration-color: rgba(255,95,86,0.6);
+  }
+
+  /* ---------------- NEED SECTION ---------------- */
+  .need-grid{
+    display:grid;
+    grid-template-columns: 1fr;
+    gap:22px;
+    max-width:1200px;
+    margin:36px auto 0;
+    width:100%;
+  }
+  .need-row{
+    display:grid;
+    grid-template-columns: 44px 1fr;
+    gap:22px;
+    align-items:flex-start;
+    padding:20px 0;
+    border-bottom:1px dashed var(--line);
+  }
+  .need-num{
+    font-family:'JetBrains Mono', monospace;
+    color:var(--signal);
+    font-size:1rem;
+    font-weight:700;
+    border:1px solid var(--signal-dim);
+    width:40px; height:40px;
+    display:flex; align-items:center; justify-content:center;
+    border-radius:50%;
+  }
+  .need-text{ font-size:1.05rem; line-height:1.7; }
+  .need-text .sub{ color:var(--ink-dim); font-size:0.92rem; margin-top:6px; }
+
+  .paper-strip{
+    margin-top:44px;
+    display:flex;
+    align-items:center;
+    gap:24px;
+    max-width:1200px;
+    margin-left:auto; margin-right:auto;
+    flex-wrap:wrap;
+  }
+  .paper-strip img{
+    width:min(100%, 640px);
+    border:1px solid var(--line);
+    filter: brightness(0.95) contrast(1.05);
+  }
+  .paper-strip .paper-note{
+    font-family:'JetBrains Mono', monospace;
+    font-size:0.78rem;
+    color:var(--ink-dim);
+    max-width:320px;
+    line-height:1.6;
+  }
+
+  /* joker/batman movie strip */
+  .movie-strip{
+    display:grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap:26px;
+    max-width:1200px;
+    margin:44px auto 0;
+    width:100%;
+  }
+  .movie-card{ text-align:center; }
+  .movie-card img{
+    width:100%;
+    aspect-ratio:3/2;
+    object-fit:cover;
+    filter:grayscale(30%) contrast(1.05);
+    border:1px solid var(--line);
+  }
+  .movie-card p{
+    margin-top:16px;
+    font-size:0.95rem;
+    line-height:1.6;
+    color:var(--ink-dim);
+  }
+  .movie-chain{
+    display:flex; align-items:center; justify-content:center;
+    gap:26px;
+    flex-wrap:wrap;
+    margin-top:8px;
+  }
+  .chain-arrow{ color:var(--signal); font-size:1.6rem; }
+  @media (max-width:900px){
+    .movie-strip{ grid-template-columns:1fr; }
+    .movie-chain{ flex-direction:column; }
+    .chain-arrow{ transform:rotate(90deg); }
+  }
+
+  /* ---------------- CONCLUSION ---------------- */
+  .conclude-wrap{
+    display:grid;
+    grid-template-columns: 1.1fr 0.9fr;
+    gap:60px;
+    align-items:center;
+    max-width:1200px;
+    margin:0 auto;
+    width:100%;
+  }
+  .conclude-wrap img{
+    width:100%;
+    border:1px solid var(--line);
+    filter:grayscale(10%);
+  }
+  .final-statement{
+    font-size:clamp(1.5rem, 2.6vw, 2.1rem);
+    font-weight:700;
+    line-height:1.6;
+  }
+  .final-statement .hl{ color:var(--signal); }
+  @media (max-width:900px){
+    .conclude-wrap{ grid-template-columns:1fr; }
+  }
+
+  /* ---------------- END ---------------- */
+  .end-section{
+    align-items:center;
+    text-align:center;
+    background: radial-gradient(ellipse 60% 60% at 50% 40%, rgba(95,251,241,0.08), transparent 65%);
+  }
+  .end-mark{
+    font-family:'Space Grotesk', sans-serif;
+    font-size:clamp(3.5rem, 12vw, 8rem);
+    font-weight:700;
+    letter-spacing:0.02em;
+    color:var(--ink);
+    position:relative;
+  }
+  .flatline{
+    width:min(70vw, 640px);
+    margin: 30px auto 10px;
+  }
+  .flatline svg{ width:100%; height:auto; }
+
+  .team-panel{
+    margin-top:40px;
+    display:flex;
+    gap:26px;
+    align-items:center;
+    justify-content:center;
+    flex-wrap:wrap;
+  }
+  .team-panel img{
+    width:min(90vw, 640px);
+    border:1px solid var(--line);
+    filter:grayscale(10%);
+  }
+  .end-sub{
+    font-family:'JetBrains Mono', monospace;
+    color:var(--ink-dim);
+    font-size:0.85rem;
+    margin-top:26px;
+    letter-spacing:0.08em;
+  }
+
+  /* progress dots */
+  .progress-nav{
+    position:fixed;
+    right:22px; top:50%;
+    transform:translateY(-50%);
+    z-index:50;
+    display:flex; flex-direction:column; gap:14px;
+  }
+  .progress-nav a{
+    width:9px; height:9px;
+    border-radius:50%;
+    background:rgba(255,255,255,0.15);
+    display:block;
+    transition:.25s;
+  }
+  .progress-nav a.active{
+    background:var(--signal);
+    box-shadow:0 0 10px var(--signal);
+    transform:scale(1.3);
+  }
+  @media (max-width:800px){ .progress-nav{ display:none; } }
+
+  .section-index{
+    font-family:'JetBrains Mono', monospace;
+    font-size:0.7rem;
+    color:var(--ink-dim);
+    position:absolute;
+    top:6vh; right:8vw;
+    letter-spacing:0.1em;
+  }
+
+  @media (max-width:900px){
+    section{ padding:9vh 6vw; }
+    .char-panel{ grid-template-columns:1fr; gap:30px; }
+    .waveform-hero{ display:none; }
+    .warn-box{ flex-direction:column; text-align:center; }
+    .warn-box .warn-text{ display:flex; flex-direction:column; align-items:center; }
+  }
+
+  .reveal{
+    opacity:0;
+    transform:translateY(24px);
+    transition: opacity 0.8s ease, transform 0.8s ease;
+  }
+  .reveal.in{
+    opacity:1;
+    transform:translateY(0);
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    .reveal{ opacity:1; transform:none; transition:none; }
+    .tag::before{ animation:none; }
+    .scroll-cue{ animation:none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="scope-grid"></div>
+<div class="scope-vignette"></div>
+
+<nav class="progress-nav" id="progressNav"></nav>
+
+<div class="deck">
+
+  <!-- 1. HERO -->
+  <section id="s1" class="hero">
+    <div class="tag">signal / detected</div>
+    <div class="hero-title reveal">
+      <h1>AI가 감정을<br><span class="accent">"예상"</span>하는 법</h1>
+    </div>
+    <p class="lead reveal">
+      느끼는 것이 아니다!
+    </p>
+    <div class="thought-mini reveal">저녁 뭐 먹지...</div>
+
+    <div class="waveform-hero">
+      <svg viewBox="0 0 400 300" fill="none">
+        <path id="heroWave" d="M0,150 Q40,60 80,150 T160,150 T240,150 T320,150 T400,150"
+          stroke="#5ffbf1" stroke-width="2" fill="none" opacity="0.8"/>
+        <path d="M0,150 Q40,110 80,150 T160,150 T240,150 T320,150 T400,150"
+          stroke="#2a8f89" stroke-width="1.4" fill="none" opacity="0.5"/>
+      </svg>
+    </div>
+
+    <div class="hero-meta">
+      <span>REC 00:00:01</span>
+      <span>CH_EMOTION</span>
+      <span>ⓘ 조원: 이상민, 박재영, 엄태현, 유지훈</span>
+    </div>
+    <div class="scroll-cue">
+      <span>SCROLL</span>
+      <span>↓</span>
+    </div>
+  </section>
+
+  <!-- 2. INTRO / L character -->
+  <section id="s2">
+    <span class="section-index">01 / INTRO</span>
+    <div class="char-panel">
+      <div class="reveal">
+        <div class="tag">01 · 도입</div>
+        <h2>사람도 몰라보는<br>감정의 정체</h2>
+        <p class="lead">
+          AI는 실제로 감정을 느끼는 건 불가능합니다.<br>
+          겉으로 드러나는 신호만으로 감정을 "예상"하는 법을 배웁니다.
+        </p>
+        <div class="quote-bubble">"AI &gt;&gt; 감정을 예상했어요."</div>
+      </div>
+      <div class="panel-frame reveal" data-label="CH.01 — REACTION READ">
+        <img src="img/deathnote1.jpg" alt="감정을 읽어내는 장면">
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. 감정 학습 원리 -->
+  <section id="s3">
+    <span class="section-index">02 / LEARNING</span>
+    <div class="tag" style="align-self:center;">02 · AI의 감정 학습</div>
+    <h2 style="text-align:center;">AI는 어떻게 감정을 배울까</h2>
+    <p class="lead reveal" style="text-align:center; margin:0 auto;">
+      AI는 사랑, 분노, 두려움 같은 감정을 특정 상황에 대한 인간의 반응으로 학습해요.
+      그리고 예상되는 문맥에 예상된 표현을 생성해서, 학습된 인간의 감정을 시뮬레이션합니다.
+      한 감정과 유사한 감정일수록 AI도 유사한 감정을 표현한 것으로 나타나요.
+    </p>
+
+    <div class="learn-flow">
+      <div class="learn-card reveal">
+        <span class="label-tag">INPUT — 드리프트</span>
+        <div class="panel-frame" data-label="상황 A">
+          <img src="img/drift_car.jpg" alt="드리프트 장면">
+        </div>
+        <p class="caption">특정 상황에 대한<br>인간들의 감정을 학습</p>
+      </div>
+      <div class="arrow-signal">→</div>
+      <div class="learn-card reveal">
+        <span class="label-tag">OUTPUT — 복선 드리프트!?</span>
+        <div class="panel-frame" data-label="상황 B (유사 패턴)">
+          <img src="img/drift_train.jpg" alt="복선 드리프트">
+        </div>
+        <p class="caption">특정 감정이 예상되는 상황에<br>예상된 표현을 사용</p>
+      </div>
+    </div>
+    <div class="callout-float">"유사한 감정일수록 유사한 감정을 표현해요!"</div>
+  </section>
+
+  <!-- 4. 유의점 -->
+  <section id="s4" class="warn-section">
+    <span class="section-index">03 / CAUTION</span>
+    <div class="warn-box">
+      <div class="warn-visual reveal">
+        <svg viewBox="0 0 220 220">
+          <circle cx="110" cy="110" r="95" fill="none" stroke="#ff5f56" stroke-width="1" opacity="0.35"/>
+          <path d="M20,60 L200,60" stroke="#ff5f56" stroke-width="1" stroke-dasharray="4 6" opacity="0.5"/>
+          <path d="M20,160 L200,160" stroke="#ff5f56" stroke-width="1" stroke-dasharray="4 6" opacity="0.5"/>
+          <g id="jaggedWave">
+            <path d="M10,110 L40,80 L60,140 L85,60 L105,150 L130,90 L155,130 L180,70 L210,110"
+              stroke="#ff5f56" stroke-width="2.4" fill="none"/>
+          </g>
+        </svg>
+        <div class="empty-bubble">(텅)</div>
+      </div>
+      <div class="warn-text reveal">
+        <div class="tag">03 · 유의점</div>
+        <p class="warn-statement">
+          다만 유의할 점은, AI는 감정을 <span class="strike-target">모방</span>하는 것이지
+          <br>실제 감정을 <span class="strike-target">느끼거나</span> 주관적인 경험을
+          하는 것이 <strong>아니라는 것</strong>입니다.
+        </p>
+        <p class="lead">
+          그렇기에 잘못된 신뢰나 과도한 애착이 생기지 않도록 주의해야 합니다.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. 필요성 -->
+  <section id="s5">
+    <span class="section-index">04 / WHY</span>
+    <div class="tag">04 · 필요성</div>
+    <h2>다만 이런 AI 감정 모델은<br>왜 필수적일까?</h2>
+    <p class="lead reveal">그 이유를 두 가지 정도 설명해보려 합니다.</p>
+
+    <div class="need-grid">
+      <div class="need-row reveal">
+        <div class="need-num">1</div>
+        <div class="need-text">
+          감정에 따른 사람의 다음 행동을 예측하기 위함이다.
+          <div class="sub">→ 감정 흐름을 읽으면, 그 다음에 사람이 어떤 반응·행동을 보일지 예상할 수 있어요.</div>
+        </div>
+      </div>
+      <div class="need-row reveal">
+        <div class="need-num">2</div>
+        <div class="need-text">
+          악성 코드 작성의 가능성을 감소시킬 수 있다.
+          <div class="sub">→ 긍정적 반응일수록 부정적 반응이 줄어들고, 그 반대도 같다. AI는 긍정적 반응을 선호해서, 코드 실수 같은 부정적인 상황에서 차분함을 강조하는 긍정적인 대응을 하여 실수를 감소시킬 수 있다.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="paper-strip reveal">
+      <img src="https://www.anthropic.com/_next/image?url=https%3A%2F%2Fwww-cdn.anthropic.com%2Fimages%2F4zrzovbb%2Fwebsite%2Fde28cdddc83c97c1a55ebc1157e9feeca31a1dba-3764x2380.png&w=3840&q=75" alt="실제 논문 자료 - 감정 벡터 생성 실험">
+      <div class="paper-note">
+        ← 실제 논문 자료 — 감정 단어로부터 감정 벡터를 생성하고, 그 벡터가 모델의 선호도와 위험 행동 대응 방식에 어떤 영향을 주는지를 실험한 결과입니다.
+      </div>
+    </div>
+  </section>
+
+  <!-- 6. 예시 조커/배트맨 -->
+  <section id="s6">
+    <span class="section-index">04-1 / EXAMPLE</span>
+    <div class="tag" style="align-self:center;">04-1 · 추가 설명 (감정 벡터 사용 시)</div>
+    <h2 style="text-align:center;">긍정 신호가 부정 신호를 밀어낸다</h2>
+
+    <div class="movie-strip">
+      <div class="movie-card reveal">
+        <div class="panel-frame" data-label="STEP 1">
+          <img src="img/joker1.jpg" alt="조커">
+        </div>
+        <p>긍정적 반응이 클수록<br>부정적 반응이 줄어든다,<br>그 반대도 같다</p>
+      </div>
+      <div class="movie-card reveal">
+        <div class="panel-frame" data-label="STEP 2">
+          <img src="img/batman_joker.jpg" alt="배트맨과 조커">
+        </div>
+        <p>긍정적 반응일수록<br>선호도가 높다</p>
+      </div>
+      <div class="movie-card reveal">
+        <div class="panel-frame" data-label="STEP 3">
+          <img src="img/joker_batman2.jpg" alt="배트맨이 조커를 제압">
+        </div>
+        <p>코드 실수(부정적) →<br>차분함 강조(긍정적 대응) →<br>실수 감소</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7. 결론 -->
+  <section id="s7">
+    <span class="section-index">05 / CONCLUSION</span>
+    <div class="conclude-wrap">
+      <div class="reveal">
+        <div class="tag">05 · 결론</div>
+        <p class="final-statement">
+          AI는 <span class="hl">감정이 없지만</span>, 감정과 유사한
+          <span class="hl">"기능적 감정"</span>을 사용합니다.
+        </p>
+        <p class="lead">
+          AI 개발자들은 이에 대해 효율성과 장점들을 중요하게 여겨야 합니다.
+        </p>
+      </div>
+      <div class="panel-frame reveal" data-label="UNDERSTANDING > EMOTION">
+        <img src="img/bleach1.jpg" alt="이해로부터 가장 먼 감정이야">
+      </div>
+    </div>
+  </section>
+
+  <!-- 8. 끝 -->
+  <section id="s8" class="end-section">
+    <span class="section-index">06 / END</span>
+    <div class="tag" style="align-self:center;">signal / terminated</div>
+    <div class="end-mark">끝</div>
+
+    <div class="flatline">
+      <svg viewBox="0 0 500 100" fill="none">
+        <path id="flatlinePath" d="M0,50 L500,50" stroke="#5ffbf1" stroke-width="2"/>
+      </svg>
+    </div>
+
+    <div class="team-panel reveal">
+      <img src="img/bleach_end.jpg" alt="조별과제 끝">
+    </div>
+    <div class="end-sub reveal">CH_EMOTION · SIGNAL LOST · 발표를 들어주셔서 감사합니다</div>
+  </section>
+
+</div>
+
+<script>
+  // reveal on scroll
+  const revealEls = document.querySelectorAll('.reveal');
+  const io = new IntersectionObserver((entries)=>{
+    entries.forEach(e=>{
+      if(e.isIntersecting){ e.target.classList.add('in'); }
+    });
+  }, { threshold: 0.15 });
+  revealEls.forEach(el=>io.observe(el));
+
+  // progress nav dots
+  const sections = document.querySelectorAll('section');
+  const nav = document.getElementById('progressNav');
+  sections.forEach(sec=>{
+    const a = document.createElement('a');
+    a.href = '#'+sec.id;
+    nav.appendChild(a);
+  });
+  const navLinks = nav.querySelectorAll('a');
+  const navObserver = new IntersectionObserver((entries)=>{
+    entries.forEach(entry=>{
+      const idx = Array.from(sections).indexOf(entry.target);
+      if(entry.isIntersecting){
+        navLinks.forEach(l=>l.classList.remove('active'));
+        navLinks[idx].classList.add('active');
+      }
+    });
+  }, { threshold: 0.5 });
+  sections.forEach(s=>navObserver.observe(s));
+
+  // hero waveform gentle animation
+  const heroWave = document.getElementById('heroWave');
+  let t = 0;
+  function animateWave(){
+    t += 0.04;
+    const amp = 30 + Math.sin(t*0.7)*10;
+    const path = `M0,150 Q40,${150-amp} 80,150 T160,150 T240,150 T320,150 T400,150`;
+    if(heroWave) heroWave.setAttribute('d', path);
+    requestAnimationFrame(animateWave);
+  }
+  if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+    animateWave();
+  }
+
+  // flatline pulse animation on end section
+  const flatlinePath = document.getElementById('flatlinePath');
+  let ft = 0;
+  function animateFlatline(){
+    ft += 0.05;
+    const pulse = Math.sin(ft) > 0.9 ? Math.sin(ft*40)*20 : 0;
+    const path = `M0,50 L200,50 L215,${50-pulse*1.5} L225,${50+pulse*2} L235,50 L500,50`;
+    if(flatlinePath) flatlinePath.setAttribute('d', path);
+    requestAnimationFrame(animateFlatline);
+  }
+  if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+    animateFlatline();
+  }
+</script>
+
+</body>
+</html>
